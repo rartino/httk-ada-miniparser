@@ -36,6 +36,14 @@ package Miniparser.Lexer is
    package UString_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Unbounded_String);
 
+   --  Comment markers for stripping comments during lexing
+   type Comment_Marker is record
+      Start_Mark : Unbounded_String;
+      End_Mark   : Unbounded_String;
+   end record;
+   package Comment_Vectors is new Ada.Containers.Vectors
+     (Positive, Comment_Marker);
+
    Parser_Syntax_Error : exception;
 
    --  Tokenize source into a vector of tokens.
@@ -45,13 +53,15 @@ package Miniparser.Lexer is
    --    matches that allow greedy matching (e.g., scientific notation).
    --  Literals: list of literal strings to match exactly.
    --  Ignore: a string where each character is a pattern to match and discard.
+   --  Comment_Markers: list of (start, end) pairs for comment stripping.
    --  Verbosity: diagnostic output level (0 = silent).
    function Lex
-     (Source         : String;
-      Tokens         : Token_Def_Vectors.Vector;
-      Partial_Tokens : Token_Def_Vectors.Vector;
-      Literals       : UString_Vectors.Vector;
-      Ignore         : String;
-      Verbosity      : Natural := 0) return Token_Entry_Vectors.Vector;
+     (Source          : String;
+      Tokens          : Token_Def_Vectors.Vector;
+      Partial_Tokens  : Token_Def_Vectors.Vector;
+      Literals        : UString_Vectors.Vector;
+      Ignore          : String;
+      Comment_Markers : Comment_Vectors.Vector := Comment_Vectors.Empty_Vector;
+      Verbosity       : Natural := 0) return Token_Entry_Vectors.Vector;
 
 end Miniparser.Lexer;

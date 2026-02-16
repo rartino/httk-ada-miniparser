@@ -1,6 +1,7 @@
 with Ada.Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Containers.Ordered_Sets;
+with Miniparser.Parser;
 
 package body Miniparser.Language_Spec is
 
@@ -78,6 +79,113 @@ package body Miniparser.Language_Spec is
       R.Children.Append (C8);
       return R;
    end N;
+
+   ----------------------------------------------------------------
+   --  AST comparison
+   ----------------------------------------------------------------
+
+   function AST_Equal (A, B : AST_Node_Access) return Boolean is
+   begin
+      if A = null and B = null then
+         return True;
+      end if;
+      if A = null or B = null then
+         return False;
+      end if;
+      if A.Tag /= B.Tag then
+         return False;
+      end if;
+      if Natural (A.Children.Length) /= Natural (B.Children.Length) then
+         return False;
+      end if;
+      for I in 1 .. Natural (A.Children.Length) loop
+         if not AST_Equal (A.Children (I), B.Children (I)) then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end AST_Equal;
+
+   ----------------------------------------------------------------
+   --  AST debug printing
+   ----------------------------------------------------------------
+
+   procedure Print_AST (Node : AST_Node_Access; Indent : Natural := 0) is
+      use Ada.Text_IO;
+      Prefix : constant String := (1 .. Indent * 2 => ' ');
+   begin
+      if Node = null then
+         Put_Line (Prefix & "(null)");
+         return;
+      end if;
+      if Node.Children.Is_Empty then
+         Put_Line (Prefix & "'" & S (Node.Tag) & "'");
+      else
+         Put_Line (Prefix & "('" & S (Node.Tag) & "'");
+         for C of Node.Children loop
+            Print_AST (C, Indent + 1);
+         end loop;
+         Put_Line (Prefix & ")");
+      end if;
+   end Print_AST;
+
+   ----------------------------------------------------------------
+   --  Regex escape translation for GNAT.Regpat compatibility
+   ----------------------------------------------------------------
+   --  GNAT.Regpat does not support \v, \f, or \xNN hex escapes.
+   --  This function translates them into literal characters.
+
+   function Translate_Regex_Escapes (Pat : String) return String is
+      Result : Unbounded_String;
+      I      : Positive := Pat'First;
+
+      function Hex_Digit (C : Character) return Natural is
+      begin
+         case C is
+            when '0' .. '9' => return Character'Pos (C) - Character'Pos ('0');
+            when 'a' .. 'f' => return Character'Pos (C) - Character'Pos ('a') + 10;
+            when 'A' .. 'F' => return Character'Pos (C) - Character'Pos ('A') + 10;
+            when others      => return Natural'Last;  --  sentinel: not a hex digit
+         end case;
+      end Hex_Digit;
+
+   begin
+      while I <= Pat'Last loop
+         if Pat (I) = '\' and then I + 1 <= Pat'Last then
+            case Pat (I + 1) is
+               when 'v' =>
+                  Append (Result, Character'Val (11));  --  vertical tab
+                  I := I + 2;
+               when 'f' =>
+                  Append (Result, Character'Val (12));  --  form feed
+                  I := I + 2;
+               when 'x' =>
+                  --  \xNN hex escape
+                  if I + 3 <= Pat'Last
+                    and then Hex_Digit (Pat (I + 2)) /= Natural'Last
+                    and then Hex_Digit (Pat (I + 3)) /= Natural'Last
+                  then
+                     Append (Result, Character'Val
+                       (Hex_Digit (Pat (I + 2)) * 16
+                        + Hex_Digit (Pat (I + 3))));
+                     I := I + 4;
+                  else
+                     --  Not a valid \xNN, pass through as-is
+                     Append (Result, Pat (I));
+                     I := I + 1;
+                  end if;
+               when others =>
+                  --  Pass through other escapes (\t, \n, \r, etc.)
+                  Append (Result, Pat (I));
+                  I := I + 1;
+            end case;
+         else
+            Append (Result, Pat (I));
+            I := I + 1;
+         end if;
+      end loop;
+      return S (Result);
+   end Translate_Regex_Escapes;
 
    ----------------------------------------------------------------
    --  Token helper: check if a name is in the tokens list
@@ -209,7 +317,7 @@ package body Miniparser.Language_Spec is
                I := I + 1;
             end loop;
             BNF.Append ((LHS => U ("?" & S (Rep_Str)),
-                         RHS => Vec_Of (Content)));
+                         RHS => Vec_Of (Translate_Regex_Escapes (Content))));
             Alts.Append (Vec_Of (S (Rep_Str)));
             return Alts;
          end;
@@ -933,6 +1041,133 @@ package body Miniparser.Language_Spec is
    end Build_Parse_Tables;
 
    ----------------------------------------------------------------
+   --  Bootstrap: the hardcoded EBNF language spec
+   ----------------------------------------------------------------
+
+   LS_EBNF : Language_Spec_Record;
+   LS_EBNF_Initialized : Boolean := False;
+
+   procedure Initialize_LS_EBNF is
+   begin
+      if LS_EBNF_Initialized then
+         return;
+      end if;
+
+      --  Hardcoded EBNF grammar AST (same as test_ls.adb / Python ls_ebnf)
+      LS_EBNF.EBNF_AST := N ("Grammar",
+        N ("Rule",
+          N ("identifier", N ("Optional")),
+          N ("Concatenation",
+            N ("terminal", N ("""[""")),
+            N ("identifier", N ("Rhs")),
+            N ("terminal", N ("""]""")))),
+        N ("Rule",
+          N ("identifier", N ("Repetition")),
+          N ("Concatenation",
+            N ("terminal", N ("""{""")),
+            N ("identifier", N ("Rhs")),
+            N ("terminal", N ("""}""")))),
+        N ("Rule",
+          N ("identifier", N ("Grouping")),
+          N ("Concatenation",
+            N ("terminal", N ("""(""")),
+            N ("identifier", N ("Rhs")),
+            N ("terminal", N (""")""")))),
+        N ("Rule",
+          N ("identifier", N ("Alteration")),
+          N ("Concatenation",
+            N ("identifier", N ("Rhs")),
+            N ("terminal", N ("""|""")),
+            N ("identifier", N ("Rhs")))),
+        N ("Rule",
+          N ("identifier", N ("Concatenation")),
+          N ("Concatenation",
+            N ("identifier", N ("Rhs")),
+            N ("terminal", N (""",""")),
+            N ("identifier", N ("Rhs")))),
+        N ("Rule",
+          N ("identifier", N ("Rhs")),
+          N ("Alteration",
+            N ("identifier", N ("identifier")),
+            N ("identifier", N ("terminal")),
+            N ("identifier", N ("special")),
+            N ("identifier", N ("Optional")),
+            N ("identifier", N ("Repetition")),
+            N ("identifier", N ("Grouping")),
+            N ("identifier", N ("Alteration")),
+            N ("identifier", N ("Concatenation")))),
+        N ("Rule",
+          N ("identifier", N ("Rule")),
+          N ("Concatenation",
+            N ("identifier", N ("identifier")),
+            N ("terminal", N ("""=""")),
+            N ("identifier", N ("Rhs")),
+            N ("terminal", N (""";""")))),
+        N ("Rule",
+          N ("identifier", N ("Grammar")),
+          N ("Repetition", N ("identifier", N ("Rule")))));
+
+      LS_EBNF.Start := U ("Grammar");
+
+      LS_EBNF.Ignore.Insert (" ");
+      LS_EBNF.Ignore.Insert ((1 => ASCII.HT));
+      LS_EBNF.Ignore.Insert ((1 => ASCII.LF));
+
+      LS_EBNF.Comment_Markers.Append
+        ((Start_Mark => U ("(*"), End_Mark => U ("*)")));
+
+      LS_EBNF.Literals.Insert ("[");
+      LS_EBNF.Literals.Insert ("]");
+      LS_EBNF.Literals.Insert ("{");
+      LS_EBNF.Literals.Insert ("}");
+      LS_EBNF.Literals.Insert ("(");
+      LS_EBNF.Literals.Insert (")");
+      LS_EBNF.Literals.Insert ("|");
+      LS_EBNF.Literals.Insert (",");
+      LS_EBNF.Literals.Insert (";");
+      LS_EBNF.Literals.Insert ("=");
+
+      declare
+         P1 : Precedence_Entry;
+         P2 : Precedence_Entry;
+      begin
+         P1.Assoc := U ("left");
+         P1.Symbols.Append (U ("|"));
+         P2.Assoc := U ("left");
+         P2.Symbols.Append (U (","));
+         LS_EBNF.Precedence.Append (P1);
+         LS_EBNF.Precedence.Append (P2);
+      end;
+
+      LS_EBNF.Tokens.Append
+        ((Name    => U ("identifier"),
+          Pattern => U ("[a-zA-Z][a-zA-Z0-9_]*")));
+      LS_EBNF.Tokens.Append
+        ((Name    => U ("terminal"),
+          Pattern => U ("""([^\\""]|.)*""|'([^\\']|.)*'")));
+      LS_EBNF.Tokens.Append
+        ((Name    => U ("special"),
+          Pattern => U ("\?[^?]*\?")));
+
+      LS_EBNF.Simplify.Append (U ("Rhs"));
+      LS_EBNF.Aggregate.Append (U ("Grammar"));
+      LS_EBNF.Aggregate.Append (U ("Alteration"));
+      LS_EBNF.Aggregate.Append (U ("Concatenation"));
+      LS_EBNF.Remove.Append (U ("["));
+      LS_EBNF.Remove.Append (U ("]"));
+      LS_EBNF.Remove.Append (U ("{"));
+      LS_EBNF.Remove.Append (U ("}"));
+      LS_EBNF.Remove.Append (U ("("));
+      LS_EBNF.Remove.Append (U (")"));
+      LS_EBNF.Remove.Append (U ("|"));
+      LS_EBNF.Remove.Append (U (","));
+      LS_EBNF.Remove.Append (U (";"));
+      LS_EBNF.Remove.Append (U ("="));
+
+      LS_EBNF_Initialized := True;
+   end Initialize_LS_EBNF;
+
+   ----------------------------------------------------------------
    --  Build_LS: main entry point
    ----------------------------------------------------------------
 
@@ -945,8 +1180,21 @@ package body Miniparser.Language_Spec is
       --  Step 1: Get BNF grammar from EBNF AST
       if not LS.Has_BNF then
          if LS.EBNF_AST = null then
-            raise Parser_Grammar_Error with
-              "build_ls needs ebnf_grammar_ast (parser not yet ported)";
+            --  No pre-built AST: parse EBNF grammar text via bootstrap
+            if Length (LS.EBNF_Grammar) = 0 then
+               raise Parser_Grammar_Error with
+                 "build_ls needs ebnf_grammar or ebnf_grammar_ast";
+            end if;
+
+            --  Initialize and build the bootstrap EBNF parser
+            Initialize_LS_EBNF;
+            if not LS_EBNF.Has_Parse then
+               Build_LS (LS_EBNF);
+            end if;
+
+            --  Parse the EBNF grammar text
+            LS.EBNF_AST :=
+              Miniparser.Parser.Parse (LS_EBNF, S (LS.EBNF_Grammar));
          end if;
 
          --  Build a literal set for the EBNF converter (from the EBNF

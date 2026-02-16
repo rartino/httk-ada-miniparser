@@ -33,7 +33,7 @@ package body Miniparser.Lexer is
 
    -----------------------
    -- Pre-scan: split source into characters with position info
-   -- (simplified: no comment stripping)
+   -- Strips comments based on comment_markers
    -----------------------
 
    type Char_With_Pos is record
@@ -44,13 +44,29 @@ package body Miniparser.Lexer is
    package Char_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Char_With_Pos);
 
+   --  Check if Source starting at Idx matches Pat
+   function Matches_At
+     (Source : String; Idx : Positive; Pat : String) return Boolean
+   is
+   begin
+      if Idx + Pat'Length - 1 > Source'Last then
+         return False;
+      end if;
+      return Source (Idx .. Idx + Pat'Length - 1) = Pat;
+   end Matches_At;
+
    procedure Prescan_Source
-     (Source : String;
-      Chars  : in out Char_Vectors.Vector)
+     (Source          : String;
+      Comment_Markers : Comment_Vectors.Vector;
+      Chars           : in out Char_Vectors.Vector)
    is
       Line_Num   : Natural := 0;
       Line_Start : Natural := Source'First;
       Line_End   : Natural;
+
+      --  Comment tracking state (persists across lines)
+      In_Comment : Boolean := False;
+      End_Mark   : Unbounded_String;
    begin
       if Source'Length = 0 then
          return;
@@ -83,16 +99,78 @@ package body Miniparser.Lexer is
               (if Line_End <= Source'Last
                then Line_End       --  include the LF character
                else Source'Last);
-            Col : Natural := 0;
          begin
-            for J in Line_Start .. Char_Last loop
-               Col := Col + 1;
-               Chars.Append
-                 ((Ch  => Source (J),
-                   Pos => (Line      => Line_Num,
-                           Column    => Col,
-                           Line_Text => Line_Text)));
-            end loop;
+            if Comment_Markers.Is_Empty then
+               --  Fast path: no comment markers, emit all characters
+               declare
+                  Col : Natural := 0;
+               begin
+                  for J in Line_Start .. Char_Last loop
+                     Col := Col + 1;
+                     Chars.Append
+                       ((Ch  => Source (J),
+                         Pos => (Line      => Line_Num,
+                                 Column    => Col,
+                                 Line_Text => Line_Text)));
+                  end loop;
+               end;
+            else
+               --  Process line with comment stripping
+               declare
+                  J : Natural := Line_Start;
+               begin
+                  while J <= Char_Last loop
+                     if In_Comment then
+                        --  Look for end marker
+                        declare
+                           EM : constant String := To_String (End_Mark);
+                        begin
+                           if Matches_At (Source, J, EM) then
+                              J := J + EM'Length;
+                              In_Comment := False;
+                           else
+                              J := J + 1;
+                           end if;
+                        end;
+                     else
+                        --  Check for start of a comment
+                        declare
+                           Found : Boolean := False;
+                        begin
+                           for CM of Comment_Markers loop
+                              declare
+                                 SM : constant String :=
+                                   To_String (CM.Start_Mark);
+                              begin
+                                 if Matches_At (Source, J, SM) then
+                                    In_Comment := True;
+                                    End_Mark := CM.End_Mark;
+                                    J := J + SM'Length;
+                                    Found := True;
+                                    exit;
+                                 end if;
+                              end;
+                           end loop;
+
+                           if not Found then
+                              --  Emit this character
+                              declare
+                                 Col : constant Natural :=
+                                   J - Line_Start + 1;
+                              begin
+                                 Chars.Append
+                                   ((Ch  => Source (J),
+                                     Pos => (Line      => Line_Num,
+                                             Column    => Col,
+                                             Line_Text => Line_Text)));
+                              end;
+                              J := J + 1;
+                           end if;
+                        end;
+                     end if;
+                  end loop;
+               end;
+            end if;
          end;
 
          --  Advance past this line
@@ -109,12 +187,13 @@ package body Miniparser.Lexer is
    ---------
 
    function Lex
-     (Source         : String;
-      Tokens         : Token_Def_Vectors.Vector;
-      Partial_Tokens : Token_Def_Vectors.Vector;
-      Literals       : UString_Vectors.Vector;
-      Ignore         : String;
-      Verbosity      : Natural := 0) return Token_Entry_Vectors.Vector
+     (Source          : String;
+      Tokens          : Token_Def_Vectors.Vector;
+      Partial_Tokens  : Token_Def_Vectors.Vector;
+      Literals        : UString_Vectors.Vector;
+      Ignore          : String;
+      Comment_Markers : Comment_Vectors.Vector := Comment_Vectors.Empty_Vector;
+      Verbosity       : Natural := 0) return Token_Entry_Vectors.Vector
    is
       Result : Token_Entry_Vectors.Vector;
 
@@ -169,7 +248,7 @@ package body Miniparser.Lexer is
 
    begin
       --  Pre-scan source into characters with positions
-      Prescan_Source (Source, Chars);
+      Prescan_Source (Source, Comment_Markers, Chars);
 
       --  Build All_Literals = Literals union {each char of Ignore}
       All_Literals := Literals.Copy;

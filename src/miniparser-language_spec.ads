@@ -64,13 +64,6 @@ package Miniparser.Language_Spec is
    end record;
    package Prec_Vectors is new Ada.Containers.Vectors (Positive, Precedence_Entry);
 
-   --  Comment markers
-   type Comment_Marker is record
-      Start_Mark : Unbounded_String;
-      End_Mark   : Unbounded_String;
-   end record;
-   package Comment_Vectors is new Ada.Containers.Vectors (Positive, Comment_Marker);
-
    --  Language Specification
    type Language_Spec_Record is record
       --  Configuration
@@ -85,6 +78,9 @@ package Miniparser.Language_Spec is
       Aggregate      : UString_Vectors.Vector;
       Remove         : UString_Vectors.Vector;
       Skip_Rules     : UString_Vectors.Vector;
+
+      --  Grammar source (EBNF text, for bootstrap parsing)
+      EBNF_Grammar   : Unbounded_String := Null_Unbounded_String;
 
       --  AST
       EBNF_AST       : AST_Node_Access := null;
@@ -120,6 +116,12 @@ package Miniparser.Language_Spec is
      return AST_Node_Access;
    function N (Tag : String; C1, C2, C3, C4, C5, C6, C7, C8 : AST_Node_Access)
      return AST_Node_Access;
+
+   --  AST comparison (recursive tree equality)
+   function AST_Equal (A, B : AST_Node_Access) return Boolean;
+
+   --  AST debug printing
+   procedure Print_AST (Node : AST_Node_Access; Indent : Natural := 0);
 
    --  Printing
    procedure Print_LS (LS : Language_Spec_Record);
