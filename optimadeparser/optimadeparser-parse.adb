@@ -15,7 +15,8 @@ package body Optimadeparser.Parse is
    LS          : Language_Spec_Record;
    Initialized : Boolean := False;
 
-   --  Read entire file into a string
+   --  Read_File: read an entire text file into a single String.
+   --  Lines are separated by LF characters in the result.
    function Read_File (Path : String) return String is
       F   : Ada.Text_IO.File_Type;
       Buf : Unbounded_String;
@@ -161,6 +162,10 @@ package body Optimadeparser.Parse is
    -- Fix_Const --
    ---------------
 
+   --  Fix_Const: normalize a Property, String, or Number node for OJF output.
+   --    Property → returns the Identifier child directly.
+   --    String   → strips surrounding double-quote characters from the value.
+   --    Number (or other) → returned as-is.
    function Fix_Const (Node : AST_Node_Access) return AST_Node_Access is
       Tag : constant String := S (Node.Tag);
    begin
@@ -185,6 +190,22 @@ package body Optimadeparser.Parse is
    -- Parse_Tree_To_OJF_Recurse --
    ---------------------------------
 
+   --  Recurse: the main OJF conversion function.  Transforms a raw parse
+   --  tree node into the simplified OJF representation.  Dispatches on the
+   --  node's Tag to handle:
+   --
+   --  Expression / ExpressionClause / ExpressionPhrase / Comparison:
+   --    Handles NOT prefix, AND/OR binary operators, and recurses into
+   --    sub-expressions.  Builds a tree of logic operators.
+   --
+   --  PropertyFirstComparison / ConstantFirstComparison:
+   --    Extracts the left operand and dispatches on the RHS type:
+   --      ValueOpRhs        → simple comparison (=, !=, <, <=, >, >=)
+   --      FuzzyStringOpRhs  → CONTAINS / STARTS / ENDS
+   --      KnownOpRhs        → IS_KNOWN / IS_UNKNOWN
+   --      SetOpRhs          → HAS / HAS_ALL / HAS_ONLY / HAS_ANY / HAS_EXACTLY
+   --      SetZipOpRhs       → HAS_ZIP and HAS_ZIP_* variants
+   --      LengthOpRhs       → LENGTH comparison
    function Recurse (Node : AST_Node_Access) return AST_Node_Access is
       Tag : constant String := S (Node.Tag);
 
@@ -773,6 +794,9 @@ package body Optimadeparser.Parse is
 
    procedure Print_OJF (Node : AST_Node_Access) is
 
+      --  Flat_Repr: produce a single-line string representation of an OJF
+      --  node and all its descendants.  Used to test whether a subtree fits
+      --  on one line (within 80 columns) before deciding to wrap.
       function Flat_Repr (N : AST_Node_Access) return String is
          Tag : constant String := S (N.Tag);
       begin
@@ -818,6 +842,11 @@ package body Optimadeparser.Parse is
          end if;
       end Flat_Repr;
 
+      --  Print_Rec: recursive pretty-printer.  If the flat representation
+      --  fits within 80 columns from the current Column position, prints
+      --  it on one line.  Otherwise, wraps with one child per line,
+      --  indented to Column+1.  Suffix is appended after the closing
+      --  paren (e.g. "," or ")" for nested structures).
       procedure Print_Rec
         (Node   : AST_Node_Access;
          Column : Natural;

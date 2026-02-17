@@ -1,8 +1,51 @@
---  Miniparser: A generic LR(1) parser framework
---  Ada implementation
+--  Miniparser: A generic LR(1) parser framework — Ada implementation
 --
---  Originally a Python parser extracted from the httk project.
---  This is a port of the lexer component.
+--  A relatively bare-bones LR(1) parser that parses strings into abstract
+--  syntax trees (ASTs) for generic languages.  Language grammars can be given
+--  in textual EBNF.  Originally extracted from the httk project (Python) and
+--  ported to Ada.
+--
+--  Architecture
+--  ------------
+--  The framework consists of three child packages:
+--
+--    Miniparser.Lexer          — Tokenizer.  Splits source strings into token
+--                                 sequences using regex patterns, literal
+--                                 matching, and partial-token support for
+--                                 greedy matching (e.g. scientific notation).
+--
+--    Miniparser.Language_Spec  — Language specification builder.  Takes an EBNF
+--                                 grammar (text or pre-built AST), converts it
+--                                 to BNF, and builds rule tables, FIRST sets,
+--                                 and LR(1) ACTION/GOTO parse tables.
+--
+--    Miniparser.Parser         — LR(1) shift/reduce parser.  Consumes tokens
+--                                 and produces ASTs, with node filtering
+--                                 (simplify/aggregate/remove) on reduce.
+--
+--  How the parser works (5-step pipeline)
+--  --------------------------------------
+--  1. The EBNF grammar text is parsed into an AST using a hardcoded bootstrap
+--     grammar of the EBNF language itself.
+--  2. The EBNF AST is translated to BNF, expanding alternation, optionals,
+--     groupings, and repetitions into separate rules.
+--  3. The BNF is processed into a rule table mapping each non-terminal to its
+--     list of right-hand-side alternatives.
+--  4. A FIRST table is computed via fixed-point iteration, mapping each symbol
+--     to the set of terminals that may begin its derivations.
+--  5. The rule table and FIRST table are used to build the LR(1) ACTION and
+--     GOTO tables encoding the parser state machine.
+--
+--  Parse tables are generated on first use and cached inside the
+--  Language_Spec_Record.
+--
+--  Diagnostic output
+--  -----------------
+--  Pass Verbosity => N to Parse or Build_LS to get diagnostic output:
+--    0     — silent (default)
+--    3+    — parser state transitions and shift/reduce actions
+--    4+    — symbol stack summary, lexer token output
+--    5+    — detailed symbol stack, lexer character-level input
 
 package Miniparser is
    pragma Pure;

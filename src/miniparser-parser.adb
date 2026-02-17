@@ -14,7 +14,9 @@ package body Miniparser.Parser is
    --  State stack
    package Pos_Vectors is new Ada.Containers.Vectors (Positive, Positive);
 
-   --  Check if Name is in a UString_Vectors list
+   --  In_List: check if Name appears in a UString_Vectors list.
+   --  Used to test membership in the Simplify, Aggregate, and Remove lists
+   --  during the reduce step of the parse loop.
    function In_List
      (V : UString_Vectors.Vector; Name : String) return Boolean
    is
@@ -80,7 +82,17 @@ package body Miniparser.Parser is
          Inp    := Token_Vec (Tok_Idx).Value;
          Pos    := Token_Vec (Tok_Idx).Pos;
 
-         --  Main LR(1) parsing loop
+         --  Main LR(1) parsing loop.
+         --
+         --  The loop reads one token at a time and performs the action
+         --  indicated by the ACTION table for the current (state, symbol):
+         --    Shift  — push the terminal onto the symbol stack, push the
+         --             new state onto the state stack, advance to next token.
+         --    Reduce — pop RHS_Len symbols from both stacks, filter the
+         --             popped nodes (simplify/aggregate/remove), create a
+         --             new node tagged with the LHS, push it, and follow
+         --             the GOTO table to the next state.
+         --    Accept — parsing complete; exit the loop.
          loop
             declare
                Current_State : constant Positive :=
@@ -179,7 +191,10 @@ package body Miniparser.Parser is
                            Ada.Text_IO.New_Line;
                         end if;
 
-                        --  Process subnodes with filtering
+                        --  Process subnodes with filtering:
+                        --    Simplify (or _-prefixed): inline children
+                        --    Aggregate: flatten same-type grandchildren
+                        --    Remove: discard entirely
                         if RHS_Len > 0 then
                            declare
                               Start_Idx : constant Positive :=

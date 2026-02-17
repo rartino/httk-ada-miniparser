@@ -130,10 +130,13 @@ package body Miniparser.Language_Spec is
    end Print_AST;
 
    ----------------------------------------------------------------
-   --  Regex escape translation for GNAT.Regpat compatibility
+   --  Translate_Regex_Escapes: GNAT.Regpat compatibility shim
    ----------------------------------------------------------------
-   --  GNAT.Regpat does not support \v, \f, or \xNN hex escapes.
-   --  This function translates them into literal characters.
+   --  GNAT.Regpat does not support \v, \f, or \xNN hex escapes that
+   --  may appear in EBNF special sequences (inline regex definitions).
+   --  This function translates them into literal Ada characters so that
+   --  GNAT.Regpat can compile the pattern.  Other escape sequences
+   --  (e.g. \t, \n, \d) are passed through unchanged.
 
    function Translate_Regex_Escapes (Pat : String) return String is
       Result : Unbounded_String;
@@ -188,7 +191,9 @@ package body Miniparser.Language_Spec is
    end Translate_Regex_Escapes;
 
    ----------------------------------------------------------------
-   --  Token helper: check if a name is in the tokens list
+   --  Has_Token: check if a token name exists in the token definitions list.
+   --  Used during EBNF-to-BNF conversion to skip grammar rules whose LHS
+   --  is already defined as a token (regex-based terminal).
    ----------------------------------------------------------------
 
    function Has_Token
@@ -203,6 +208,8 @@ package body Miniparser.Language_Spec is
       return False;
    end Has_Token;
 
+   --  In_Skip: check if Name appears in the skip-rules vector V.
+   --  Used to exclude rules listed in Skip_Rules from BNF conversion.
    function In_Skip (V : UString_Vectors.Vector; Name : String) return Boolean is
    begin
       for X of V loop
@@ -214,7 +221,11 @@ package body Miniparser.Language_Spec is
    end In_Skip;
 
    ----------------------------------------------------------------
-   --  EBNF unquote: handle \t \n \r in terminal strings
+   --  EBNF_Unquote: process escape sequences in EBNF terminal strings.
+   --  Handles \t (tab), \n (newline), and \r (carriage return).  Other
+   --  backslash sequences are passed through with the backslash intact.
+   --  The surrounding quote characters should already be stripped before
+   --  calling this function.
    ----------------------------------------------------------------
 
    function EBNF_Unquote (Str : String) return String is
@@ -246,9 +257,25 @@ package body Miniparser.Language_Spec is
 
    ----------------------------------------------------------------
    --  EBNF to BNF conversion
+   --
+   --  EBNF_To_BNF_RHS recursively processes an EBNF AST node (the RHS of
+   --  a grammar rule) and returns a list of BNF alternatives (each is a
+   --  vector of symbol names).  It handles:
+   --    - identifier     → single symbol reference
+   --    - terminal       → literal string (quotes stripped, escapes processed)
+   --    - special        → inline regex (becomes a new token definition)
+   --    - Concatenation  → Cartesian product of child alternatives
+   --    - Alteration     → union of child alternatives
+   --    - Optional       → child alternatives + epsilon
+   --    - Grouping       → transparent (just recurse)
+   --    - Repetition     → generates auxiliary "_repeat_*" rules
+   --
+   --  EBNF_To_BNF is the top-level driver that iterates over all Rule
+   --  children of the Grammar AST, calling EBNF_To_BNF_RHS for each,
+   --  and then converts any ?-prefixed rules into token definitions.
    ----------------------------------------------------------------
 
-   --  Return type for _ebnf_to_bnf_rhs: list of RHS alternatives
+   --  Return type for EBNF_To_BNF_RHS: list of RHS alternatives.
    --  Each alternative is a UString_Vectors.Vector of symbol names.
    package Alt_Lists is new Ada.Containers.Vectors
      (Positive, UString_Vectors.Vector, UString_Vectors."=");
@@ -512,7 +539,9 @@ package body Miniparser.Language_Spec is
    end EBNF_To_BNF;
 
    ----------------------------------------------------------------
-   --  Build Rule Table
+   --  Build_Rule_Table: construct a map from each non-terminal symbol to
+   --  its list of RHS alternatives.  Terminal symbols and skipped rules
+   --  are excluded.  This is step 3 of the 5-step build pipeline.
    ----------------------------------------------------------------
 
    procedure Build_Rule_Table
@@ -540,7 +569,12 @@ package body Miniparser.Language_Spec is
    end Build_Rule_Table;
 
    ----------------------------------------------------------------
-   --  Build First Table
+   --  Build_First_Table: compute FIRST sets via fixed-point iteration.
+   --  For each symbol, FIRST(symbol) is the set of terminals that may
+   --  appear as the first token when deriving from that symbol.  Terminals
+   --  have FIRST = {self}.  Non-terminals accumulate FIRST sets from the
+   --  first symbol of each of their RHS alternatives, iterating until no
+   --  new terminals are added.  This is step 4 of the build pipeline.
    ----------------------------------------------------------------
 
    procedure Build_First_Table
@@ -607,7 +641,24 @@ package body Miniparser.Language_Spec is
    end Build_First_Table;
 
    ----------------------------------------------------------------
-   --  Build Parse Tables (ACTION + GOTO)
+   --  Build Parse Tables (ACTION + GOTO) — step 5 of the build pipeline.
+   --
+   --  Constructs the LR(1) canonical collection of item sets and derives
+   --  the ACTION and GOTO tables.  Uses Compute_Closure to expand item
+   --  sets and resolves shift/reduce conflicts via the precedence table.
+   --
+   --  An LR(1) item is (LHS, RHS, Lookahead, Pos) where Pos is the
+   --  position of the "dot" in the RHS.  The algorithm:
+   --    1. Start with the augmented start item and compute its closure.
+   --    2. For each unprocessed item set (state), group items by the
+   --       symbol after the dot.
+   --    3. For items with the dot at the end (Pos = RHS length), add a
+   --       Reduce action keyed by the lookahead.
+   --    4. For items with the dot before a symbol, advance the dot and
+   --       compute the closure of the new item set.  If the symbol is a
+   --       terminal, add a Shift action; if a non-terminal, add a GOTO.
+   --    5. Shift/reduce conflicts are resolved by precedence/associativity;
+   --       reduce/reduce conflicts raise Parser_Grammar_Error.
    ----------------------------------------------------------------
 
    --  LR Item: (LHS, RHS, Lookahead, Pos)
@@ -663,7 +714,13 @@ package body Miniparser.Language_Spec is
       return Result;
    end Canonicalize;
 
-   --  Compute LR(1) closure of an item set
+   --  Compute_Closure: expand an LR(1) item set by adding all items
+   --  reachable by following non-terminal symbols after the dot.  For each
+   --  item with the dot before a non-terminal B, adds items for every
+   --  production of B, with lookaheads derived from the FIRST set of the
+   --  symbols following B in the original item (or the item's own lookahead
+   --  if B is the last symbol before the dot).  Iterates until no new
+   --  items are added.
    function Compute_Closure
      (Initial   : Item_Sets.Set;
       RT        : Rule_Maps.Map;
@@ -1042,6 +1099,13 @@ package body Miniparser.Language_Spec is
 
    ----------------------------------------------------------------
    --  Bootstrap: the hardcoded EBNF language spec
+   --
+   --  Initialize_LS_EBNF sets up the language specification for parsing
+   --  EBNF grammars themselves.  It contains a hardcoded AST of the EBNF
+   --  meta-grammar (the same one that could be produced by parsing the
+   --  EBNF text, but provided as a pre-built AST to break the chicken-
+   --  and-egg problem).  This is the bootstrap mechanism that allows the
+   --  parser to parse user-provided EBNF grammars.
    ----------------------------------------------------------------
 
    LS_EBNF : Language_Spec_Record;

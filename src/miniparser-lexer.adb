@@ -5,7 +5,9 @@ with GNAT.Regpat;
 package body Miniparser.Lexer is
 
    -----------------------
-   -- Helper: Regex match anchored to full string
+   -- Full_Match: test whether Data matches Pattern as a complete string.
+   -- Wraps the pattern in ^(...)$ anchors so partial matches are rejected.
+   -- Returns False (rather than raising) if the pattern is invalid.
    -----------------------
 
    function Full_Match (Pattern : String; Data : String) return Boolean is
@@ -22,8 +24,9 @@ package body Miniparser.Lexer is
    end Full_Match;
 
    -----------------------
-   -- Helper: Check if a string is "in" the ignore string
-   -- (replicates Python's substring `in` operator)
+   -- Is_In_Ignore: check if Token appears as a substring of Ignore.
+   -- Replicates Python's `token in ignore` substring test.  Used to
+   -- decide whether a matched token should be withheld from output.
    -----------------------
 
    function Is_In_Ignore (Token : String; Ignore : String) return Boolean is
@@ -32,8 +35,11 @@ package body Miniparser.Lexer is
    end Is_In_Ignore;
 
    -----------------------
-   -- Pre-scan: split source into characters with position info
-   -- Strips comments based on comment_markers
+   -- Prescan_Source: split Source into individual characters with position
+   -- info (line number, column, line text), stripping any regions delimited
+   -- by Comment_Markers.  This is the Ada equivalent of Python's
+   -- _split_chars_strip_comments generator.  The fast path (no comment
+   -- markers) avoids marker checking entirely.
    -----------------------
 
    type Char_With_Pos is record
@@ -44,7 +50,8 @@ package body Miniparser.Lexer is
    package Char_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Char_With_Pos);
 
-   --  Check if Source starting at Idx matches Pat
+   --  Matches_At: check if Source starting at position Idx matches the
+   --  string Pat exactly.  Used for detecting comment start/end markers.
    function Matches_At
      (Source : String; Idx : Positive; Pat : String) return Boolean
    is
@@ -304,7 +311,16 @@ package body Miniparser.Lexer is
          end;
       end loop;
 
-      --  Main lexer loop
+      --  Main lexer loop — greedy tokenization
+      --
+      --  On each iteration, one character is consumed (from pushback or from
+      --  the pre-scanned source) and appended to the accumulation stack.  The
+      --  stack is then tested against all literals and token regexes.  If a
+      --  full match is found, it is recorded as the "seen token" (the best
+      --  match so far).  If a partial match is found, accumulation continues.
+      --  If neither matches, the last recorded full match is emitted and any
+      --  unmatched remainder is pushed back for re-processing.
+      --
       --  Python: while c != '' or len(pushback)>0 or seen_token is not None
       --  We use C_Empty=True to represent c=='' (initially False since
       --  c starts as None in Python, and None != '' is True)
