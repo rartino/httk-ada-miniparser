@@ -3,7 +3,7 @@ project Miniparser is
    for Source_Dirs use ("src", "test");
    for Object_Dir use "obj";
    for Exec_Dir use "bin";
-   for Main use ("test_lexer.adb", "test_ls.adb", "test_parser.adb", "test_all.adb");
+   for Main use ("test_lexer.adb", "test_ls.adb", "test_parser.adb", "test_all.adb", "test_parse_optimade_filter.adb");
 
    package Compiler is
       for Default_Switches ("Ada") use
