@@ -2,7 +2,6 @@
 --  full bootstrap (EBNF text -> parse via LS_EBNF -> build tables),
 --  then parses an OPTIMADE filter string.  Mirrors test_all.py.
 --
---  NOTE: Requires optimade_filter_grammar.ebnf to exist in src/.
 with Ada.Text_IO;             use Ada.Text_IO;
 with Ada.Strings.Unbounded;   use Ada.Strings.Unbounded;
 with Ada.Command_Line;
@@ -32,7 +31,7 @@ procedure Test_All is
       return S (Buf);
    end Read_File;
 
-   Grammar_Path : constant String := "../src/optimade_filter_grammar.ebnf";
+   Grammar_Path : constant String := "grammars/optimade_filter_grammar.ebnf";
 
    LS : Language_Spec_Record;
    Result : AST_Node_Access;

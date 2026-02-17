@@ -35,7 +35,7 @@ package body Optimadeparser.Parse is
 
    procedure Initialize (Verbosity : Natural := 0) is
       Grammar_Path : constant String :=
-        "../src/optimade_filter_grammar.ebnf";
+        "../grammars/optimade_filter_grammar.ebnf";
    begin
       if Initialized then
          return;
